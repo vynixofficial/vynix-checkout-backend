@@ -279,6 +279,35 @@ app.get("/health", async (req, res) => {
     razorpayConfigured: Boolean(razorpay)
   });
 });
+/* =========================================================
+   CHECKOUT WARM-UP
+========================================================= */
+
+app.get("/api/checkout/warmup", async (req, res) => {
+  try {
+    /*
+      Wake the Render server and make sure the Shopify
+      access token is already available before the customer
+      clicks PLACE ORDER.
+    */
+
+    await getShopifyAccessToken();
+
+    res.json({
+      success: true,
+      warmed: true,
+      message: "VYNIX checkout is ready."
+    });
+  } catch (error) {
+    console.error("Checkout warm-up error:", error);
+
+    res.status(500).json({
+      success: false,
+      warmed: false,
+      message: "Checkout warm-up failed."
+    });
+  }
+});
 
 /* =========================================================
    SHOPIFY TEST
