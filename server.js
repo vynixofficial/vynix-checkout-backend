@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const Razorpay = require('razorpay');
 
 dotenv.config();
 
@@ -8,25 +9,33 @@ const app = express();
 
 const PORT = process.env.PORT || 10000;
 
+
 /*
 ============================================================
 VYNIX CHECKOUT BACKEND
 ============================================================
 
-This server will eventually handle:
+CURRENTLY ENABLED:
 
-1. COD orders
-2. Razorpay prepaid payments
-3. Razorpay payment verification
-4. Shopify order creation
-5. Shopify customer association
-6. Shipping calculation
-7. Discount handling
-8. Order-success response
+1. Render / Node.js server
+2. Shopify Admin API connection
+3. Shopify Client Credentials authentication
+4. Razorpay connection
+5. Razorpay TEST order creation
+
+NOT YET ENABLED:
+
+- Real COD order creation
+- Real Shopify order creation
+- Prepaid checkout
+- Payment verification
+- Discount processing
+- Cart clearing
+- Wishlist redirect
 
 IMPORTANT:
-- Secrets are NOT stored in this file.
-- Secrets will be added to Render Environment Variables.
+Secrets are stored in Render Environment Variables.
+They are NOT stored in this file.
 ============================================================
 */
 
@@ -57,15 +66,47 @@ app.use(
 
 /*
 ============================================================
+RAZORPAY
+============================================================
+
+The Key ID and Key Secret are loaded from Render.
+
+We will use these credentials to create Razorpay
+TEST orders.
+
+Do NOT put the actual secret inside this file.
+============================================================
+*/
+
+let razorpay = null;
+
+
+if (
+  process.env.RAZORPAY_KEY_ID &&
+  process.env.RAZORPAY_KEY_SECRET
+) {
+
+  razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+  });
+
+}
+
+
+/*
+============================================================
 BASIC SERVER INFO
 ============================================================
 */
 
 app.get('/', function (req, res) {
+
   res.json({
     success: true,
     message: 'VYNIX Checkout Backend is running.'
   });
+
 });
 
 
@@ -73,29 +114,31 @@ app.get('/', function (req, res) {
 ============================================================
 HEALTH CHECK
 ============================================================
-
-Render can use this endpoint to confirm that the server
-is alive.
-
-It does NOT expose any secret values.
-============================================================
 */
 
 app.get('/health', function (req, res) {
+
   res.json({
+
     success: true,
+
     service: 'VYNIX Checkout Backend',
+
     status: 'online',
+
     shopifyConfigured: Boolean(
       process.env.SHOPIFY_STORE_DOMAIN &&
       process.env.SHOPIFY_CLIENT_ID &&
       process.env.SHOPIFY_CLIENT_SECRET
     ),
+
     razorpayConfigured: Boolean(
       process.env.RAZORPAY_KEY_ID &&
       process.env.RAZORPAY_KEY_SECRET
     )
+
   });
+
 });
 
 
@@ -104,11 +147,11 @@ app.get('/health', function (req, res) {
 SHOPIFY ACCESS TOKEN
 ============================================================
 
-Shopify's Client Credentials Grant gives the backend an
-Admin API access token.
+Shopify's Client Credentials Grant gives the backend
+an Admin API access token.
 
-The token is temporary, so we cache it in memory and obtain
-a new one when needed.
+The token is temporary, so we cache it in memory and
+request a new one when necessary.
 
 The Client Secret NEVER goes to the browser.
 ============================================================
@@ -122,16 +165,19 @@ async function getShopifyAccessToken() {
 
   const now = Date.now();
 
+
   /*
-  Reuse the existing token if it still has more than
-  one minute remaining.
+  Reuse the current token if it has more than one minute
+  remaining.
   */
 
   if (
     shopifyToken &&
     now < shopifyTokenExpiresAt - 60 * 1000
   ) {
+
     return shopifyToken;
+
   }
 
 
@@ -150,15 +196,18 @@ async function getShopifyAccessToken() {
     !clientId ||
     !clientSecret
   ) {
+
     throw new Error(
       'Shopify environment variables are not configured.'
     );
+
   }
 
 
   const tokenResponse = await fetch(
     `https://${shopifyDomain}/admin/oauth/access_token`,
     {
+
       method: 'POST',
 
       headers: {
@@ -166,10 +215,15 @@ async function getShopifyAccessToken() {
       },
 
       body: new URLSearchParams({
+
         client_id: clientId,
+
         client_secret: clientSecret,
+
         grant_type: 'client_credentials'
+
       })
+
     }
   );
 
@@ -188,6 +242,7 @@ async function getShopifyAccessToken() {
     throw new Error(
       'Unable to authenticate with Shopify.'
     );
+
   }
 
 
@@ -195,13 +250,11 @@ async function getShopifyAccessToken() {
     tokenData.access_token;
 
 
-  /*
-  Shopify returns expires_in.
-  We keep a small safety margin.
-  */
-
   const expiresInSeconds =
-    Number(tokenData.expires_in || 86399);
+    Number(
+      tokenData.expires_in || 86399
+    );
+
 
   shopifyTokenExpiresAt =
     Date.now() +
@@ -209,6 +262,7 @@ async function getShopifyAccessToken() {
 
 
   return shopifyToken;
+
 }
 
 
@@ -218,7 +272,10 @@ SHOPIFY GRAPHQL HELPER
 ============================================================
 */
 
-async function shopifyGraphQL(query, variables = {}) {
+async function shopifyGraphQL(
+  query,
+  variables = {}
+) {
 
   const token =
     await getShopifyAccessToken();
@@ -231,17 +288,25 @@ async function shopifyGraphQL(query, variables = {}) {
   const response = await fetch(
     `https://${shopifyDomain}/admin/api/2026-07/graphql.json`,
     {
+
       method: 'POST',
 
       headers: {
+
         'Content-Type': 'application/json',
+
         'X-Shopify-Access-Token': token
+
       },
 
       body: JSON.stringify({
+
         query,
+
         variables
+
       })
+
     }
   );
 
@@ -260,6 +325,7 @@ async function shopifyGraphQL(query, variables = {}) {
     throw new Error(
       'Shopify API request failed.'
     );
+
   }
 
 
@@ -273,22 +339,18 @@ async function shopifyGraphQL(query, variables = {}) {
     throw new Error(
       'Shopify GraphQL request failed.'
     );
+
   }
 
 
   return data;
+
 }
 
 
 /*
 ============================================================
 SHOPIFY CONNECTION TEST
-============================================================
-
-Temporary development endpoint.
-
-We will use this to make sure Render can securely
-communicate with Shopify before creating real orders.
 ============================================================
 */
 
@@ -314,9 +376,13 @@ app.get(
 
 
       res.json({
+
         success: true,
+
         shop: result.data.shop
+
       });
+
 
     } catch (error) {
 
@@ -325,11 +391,195 @@ app.get(
         error
       );
 
+
       res.status(500).json({
+
         success: false,
+
         message: 'Shopify connection failed.'
+
       });
+
     }
+
+  }
+);
+
+
+/*
+============================================================
+RAZORPAY TEST ORDER
+============================================================
+
+THIS IS A TEST ENDPOINT.
+
+It creates a Razorpay order only.
+
+It does NOT:
+
+- Charge a customer
+- Open Razorpay Checkout
+- Create a Shopify order
+- Create a VYNIX order
+- Modify the Shopify cart
+
+The amount is supplied in RUPEES by the request.
+
+Example:
+
+POST /api/test/razorpay
+
+{
+  "amount": 100
+}
+
+The backend converts ₹100 into 10000 paise.
+
+============================================================
+*/
+
+app.post(
+  '/api/test/razorpay',
+  async function (req, res) {
+
+    try {
+
+      /*
+      Make sure Razorpay credentials exist.
+      */
+
+      if (!razorpay) {
+
+        return res.status(500).json({
+
+          success: false,
+
+          message:
+            'Razorpay environment variables are not configured.'
+
+        });
+
+      }
+
+
+      /*
+      Read amount from request.
+      */
+
+      const amount =
+        Number(req.body.amount);
+
+
+      /*
+      Validate amount.
+      */
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message:
+            'Please provide a valid amount greater than 0.'
+
+        });
+
+      }
+
+
+      /*
+      Convert rupees to paise.
+
+      Example:
+
+      ₹100
+      ↓
+      10000 paise
+      */
+
+      const amountInPaise =
+        Math.round(amount * 100);
+
+
+      /*
+      Create Razorpay TEST order.
+      */
+
+      const razorpayOrder =
+        await razorpay.orders.create({
+
+          amount: amountInPaise,
+
+          currency: 'INR',
+
+          receipt:
+            `vynix_test_${Date.now()}`,
+
+          notes: {
+
+            purpose:
+              'VYNIX Razorpay test order'
+
+          }
+
+        });
+
+
+      /*
+      Return only safe information to the browser.
+      */
+
+      return res.json({
+
+        success: true,
+
+        test: true,
+
+        message:
+          'Razorpay test order created successfully.',
+
+        order: {
+
+          id:
+            razorpayOrder.id,
+
+          amount:
+            razorpayOrder.amount,
+
+          currency:
+            razorpayOrder.currency,
+
+          status:
+            razorpayOrder.status
+
+        }
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Razorpay test order error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Unable to create Razorpay test order.'
+
+      });
+
+    }
+
   }
 );
 
@@ -339,10 +589,7 @@ app.get(
 CHECKOUT ROUTES
 ============================================================
 
-These are intentionally not connected to real orders yet.
-
-We will add them after the backend foundation and
-credentials are configured and tested.
+These will be implemented later.
 
 COD:
 POST /api/checkout/cod
@@ -361,8 +608,12 @@ app.post(
   function (req, res) {
 
     res.status(501).json({
+
       success: false,
-      message: 'COD checkout is not connected yet.'
+
+      message:
+        'COD checkout is not connected yet.'
+
     });
 
   }
@@ -374,8 +625,12 @@ app.post(
   function (req, res) {
 
     res.status(501).json({
+
       success: false,
-      message: 'Razorpay checkout is not connected yet.'
+
+      message:
+        'Razorpay checkout is not connected yet.'
+
     });
 
   }
@@ -387,8 +642,12 @@ app.post(
   function (req, res) {
 
     res.status(501).json({
+
       success: false,
-      message: 'Payment verification is not connected yet.'
+
+      message:
+        'Payment verification is not connected yet.'
+
     });
 
   }
@@ -409,9 +668,14 @@ app.use(
       err
     );
 
+
     res.status(500).json({
+
       success: false,
-      message: 'Internal server error.'
+
+      message:
+        'Internal server error.'
+
     });
 
   }
