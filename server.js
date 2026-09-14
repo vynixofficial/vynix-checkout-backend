@@ -17,25 +17,23 @@ VYNIX CHECKOUT BACKEND
 
 CURRENTLY ENABLED:
 
-1. Render / Node.js server
-2. Shopify Admin API connection
-3. Shopify Client Credentials authentication
-4. Razorpay connection
-5. Razorpay TEST order creation
+- Render / Node.js server
+- Shopify Admin API authentication
+- Shopify connection test
+- Razorpay connection
+- Razorpay test order
+- Checkout data validation
 
 NOT YET ENABLED:
 
-- Real COD order creation
-- Real Shopify order creation
-- Prepaid checkout
-- Payment verification
+- Live COD Shopify orders
+- Live prepaid Shopify orders
+- Razorpay payment verification
 - Discount processing
+- Final shipping calculation
 - Cart clearing
 - Wishlist redirect
 
-IMPORTANT:
-Secrets are stored in Render Environment Variables.
-They are NOT stored in this file.
 ============================================================
 */
 
@@ -68,18 +66,9 @@ app.use(
 ============================================================
 RAZORPAY
 ============================================================
-
-The Key ID and Key Secret are loaded from Render.
-
-We will use these credentials to create Razorpay
-TEST orders.
-
-Do NOT put the actual secret inside this file.
-============================================================
 */
 
 let razorpay = null;
-
 
 if (
   process.env.RAZORPAY_KEY_ID &&
@@ -96,7 +85,7 @@ if (
 
 /*
 ============================================================
-BASIC SERVER INFO
+BASIC SERVER
 ============================================================
 */
 
@@ -146,15 +135,6 @@ app.get('/health', function (req, res) {
 ============================================================
 SHOPIFY ACCESS TOKEN
 ============================================================
-
-Shopify's Client Credentials Grant gives the backend
-an Admin API access token.
-
-The token is temporary, so we cache it in memory and
-request a new one when necessary.
-
-The Client Secret NEVER goes to the browser.
-============================================================
 */
 
 let shopifyToken = null;
@@ -165,11 +145,6 @@ async function getShopifyAccessToken() {
 
   const now = Date.now();
 
-
-  /*
-  Reuse the current token if it has more than one minute
-  remaining.
-  */
 
   if (
     shopifyToken &&
@@ -410,32 +385,6 @@ app.get(
 ============================================================
 RAZORPAY TEST ORDER
 ============================================================
-
-THIS IS A TEST ENDPOINT.
-
-It creates a Razorpay order only.
-
-It does NOT:
-
-- Charge a customer
-- Open Razorpay Checkout
-- Create a Shopify order
-- Create a VYNIX order
-- Modify the Shopify cart
-
-The amount is supplied in RUPEES by the request.
-
-Example:
-
-POST /api/test/razorpay
-
-{
-  "amount": 100
-}
-
-The backend converts ₹100 into 10000 paise.
-
-============================================================
 */
 
 app.post(
@@ -443,10 +392,6 @@ app.post(
   async function (req, res) {
 
     try {
-
-      /*
-      Make sure Razorpay credentials exist.
-      */
 
       if (!razorpay) {
 
@@ -462,17 +407,9 @@ app.post(
       }
 
 
-      /*
-      Read amount from request.
-      */
-
       const amount =
         Number(req.body.amount);
 
-
-      /*
-      Validate amount.
-      */
 
       if (
         !Number.isFinite(amount) ||
@@ -491,23 +428,9 @@ app.post(
       }
 
 
-      /*
-      Convert rupees to paise.
-
-      Example:
-
-      ₹100
-      ↓
-      10000 paise
-      */
-
       const amountInPaise =
         Math.round(amount * 100);
 
-
-      /*
-      Create Razorpay TEST order.
-      */
 
       const razorpayOrder =
         await razorpay.orders.create({
@@ -528,10 +451,6 @@ app.post(
 
         });
 
-
-      /*
-      Return only safe information to the browser.
-      */
 
       return res.json({
 
@@ -586,10 +505,260 @@ app.post(
 
 /*
 ============================================================
-CHECKOUT ROUTES
+CHECKOUT DATA VALIDATION
 ============================================================
 
-These will be implemented later.
+This endpoint does NOT create an order.
+
+It only checks that the checkout drawer is sending the
+basic information our backend will need.
+
+EXPECTED DATA:
+
+{
+  "customer": {
+    "firstName": "...",
+    "lastName": "...",
+    "email": "...",
+    "phone": "..."
+  },
+
+  "shippingAddress": {
+    "address1": "...",
+    "address2": "...",
+    "city": "...",
+    "state": "...",
+    "postalCode": "...",
+    "country": "India"
+  },
+
+  "items": [
+    {
+      "variantId": "...",
+      "quantity": 1
+    }
+  ],
+
+  "discountCode": "OPTIONAL",
+
+  "paymentMethod": "cod"
+}
+
+============================================================
+*/
+
+app.post(
+  '/api/checkout/validate',
+  function (req, res) {
+
+    try {
+
+      const body =
+        req.body || {};
+
+
+      const customer =
+        body.customer || {};
+
+
+      const shippingAddress =
+        body.shippingAddress || {};
+
+
+      const items =
+        Array.isArray(body.items)
+          ? body.items
+          : [];
+
+
+      /*
+      Basic customer validation.
+      */
+
+      if (!customer.email) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message:
+            'Customer email is required.'
+
+        });
+
+      }
+
+
+      /*
+      Basic address validation.
+      */
+
+      if (
+        !shippingAddress.address1 ||
+        !shippingAddress.city ||
+        !shippingAddress.state ||
+        !shippingAddress.postalCode
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message:
+            'Complete shipping address is required.'
+
+        });
+
+      }
+
+
+      /*
+      Product validation.
+      */
+
+      if (items.length === 0) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message:
+            'At least one cart item is required.'
+
+        });
+
+      }
+
+
+      for (
+        const item of items
+      ) {
+
+        if (
+          !item.variantId ||
+          !Number.isInteger(
+            Number(item.quantity)
+          ) ||
+          Number(item.quantity) < 1
+        ) {
+
+          return res.status(400).json({
+
+            success: false,
+
+            message:
+              'Every cart item must contain a valid variant ID and quantity.'
+
+          });
+
+        }
+
+      }
+
+
+      /*
+      Payment method validation.
+      */
+
+      const allowedPaymentMethods = [
+        'cod',
+        'upi',
+        'card',
+        'wallet',
+        'netbanking'
+      ];
+
+
+      const paymentMethod =
+        body.paymentMethod;
+
+
+      if (
+        !allowedPaymentMethods.includes(
+          paymentMethod
+        )
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          message:
+            'Invalid payment method.'
+
+        });
+
+      }
+
+
+      /*
+      Discount code is optional.
+      */
+
+      const discountCode =
+        typeof body.discountCode === 'string'
+          ? body.discountCode.trim()
+          : '';
+
+
+      /*
+      Everything passed the basic validation.
+      */
+
+      return res.json({
+
+        success: true,
+
+        validated: true,
+
+        message:
+          'Checkout data received successfully.',
+
+        checkout: {
+
+          paymentMethod,
+
+          itemCount:
+            items.length,
+
+          discountCodeProvided:
+            Boolean(discountCode)
+
+        }
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Checkout validation error:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        message:
+          'Unable to validate checkout data.'
+
+      });
+
+    }
+
+  }
+);
+
+
+/*
+============================================================
+LIVE CHECKOUT ROUTES
+============================================================
+
+These remain disabled until we finish validation,
+pricing, discounts, shipping and payment verification.
 
 COD:
 POST /api/checkout/cod
