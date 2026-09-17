@@ -14,7 +14,8 @@ const app = express();
 
 const ALLOWED_ORIGINS = [
   'https://www.vynix.co.in',
-  'https://vynix.co.in'
+  'https://vynix.co.in',
+  'https://q5mxkn-w7.myshopify.com'
 ];
 
 app.use(
