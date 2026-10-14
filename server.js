@@ -536,7 +536,9 @@ async function getDiscountCodeDetails(
               title
               status
               startsAt
-              endsAt
+               endsAt
+              usageLimit
+              asyncUsageCount
 
               customerGets {
                 value {
@@ -599,6 +601,16 @@ async function getDiscountCodeDetails(
       'This discount code is not active.'
     );
   }
+   if (
+       discount.usageLimit !== null &&
+       discount.usageLimit !== undefined &&
+       Number(discount.asyncUsageCount || 0) >=
+         Number(discount.usageLimit)
+     ) {
+       throw new Error(
+         'This discount code has reached its usage limit.'
+       );
+     }
 
   const now =
     Date.now();
@@ -695,7 +707,7 @@ function buildDiscountInput(
         code:
           discount.code,
         percentage:
-          discount.percentage
+          discount.percentage*100
       }
     };
   }
