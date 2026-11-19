@@ -1414,6 +1414,12 @@ app.post(
           }
         };
       }
+       console.log('COD DISCOUNT DEBUG:', JSON.stringify({
+        discountCodeReceived: body.discountCode,
+        discountInput: totals.discountInput,
+         expectedDiscount: totals.discountAmount,
+         expectedTotal: totals.total
+      }));
 
       const mutation = `
         mutation CreateVynixCodOrder(
@@ -1482,6 +1488,11 @@ app.post(
         throw new Error(
           'Shopify order was not created.'
         );
+      }
+       if (Number(payload.order.totalPriceSet.shopMoney.amount) !== totals.total) {
+        console.error('TOTAL MISMATCH:', payload.order.name,
+          'Shopify:', payload.order.totalPriceSet.shopMoney.amount,
+          'Expected:', totals.total);
       }
 
       return res.status(200).json({
